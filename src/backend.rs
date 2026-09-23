@@ -338,6 +338,10 @@ pub enum Command {
         source: std::path::PathBuf,
         name: String,
     },
+    /// Asks where to save several downloaded attachments, then copies them there.
+    SaveAttachments {
+        files: Vec<(std::path::PathBuf, String)>,
+    },
     /// Deletes an imported pack directory.
     DeleteStickerPack {
         dir: PathBuf,

@@ -2682,6 +2682,12 @@ impl App {
                 self.backend
                     .send(Command::SaveAttachmentAs { source: path, name });
             }
+            Action::SaveAttachmentsAs { files } => {
+                if !files.is_empty() {
+                    self.backend.send(Command::SaveAttachments { files });
+                }
+                self.selection = None;
+            }
             Action::OpenFolder(path) => {
                 if path.is_dir() {
                     if let Err(error) = open::that_detached(&path) {

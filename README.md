@@ -159,7 +159,9 @@ See **[zapfast.rocks](https://zapfast.rocks)** for downloads and guides.
   choose **Open externally**. Unsupported pictures, videos, and documents keep
   opening in their default desktop apps. **Save as…** in a downloaded
   attachment's right-click menu keeps a copy wherever you choose, starting in
-  your Downloads folder. Profile pictures and downloaded images support
+  your Downloads folder. Select several messages to save their downloaded
+  attachments together in one folder, with duplicate names kept separate.
+  Profile pictures and downloaded images support
   Windows drive paths and filenames with spaces or non-ASCII characters.
   If an attachment has expired, ZapFast asks your
   phone to upload it again. Downloads stop after two minutes with an inline

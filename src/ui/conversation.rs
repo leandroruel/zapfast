@@ -5017,6 +5017,7 @@ fn recording_strip(app: &mut App, ui: &mut egui::Ui) {
 /// Replaces the composer while messages are selected.
 fn selection_bar(app: &mut App, ui: &mut egui::Ui, chat: &str, selected: &[String]) {
     let palette = app.palette;
+    let files = selected_attachment_files(app, chat, selected);
     ui.horizontal(|ui| {
         if theme::icon_button(
             ui,
@@ -5038,6 +5039,13 @@ fn selection_bar(app: &mut App, ui: &mut egui::Ui, chat: &str, selected: &[Strin
         };
         theme::text(ui, &count, theme::medium(14.5), palette.text);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if !files.is_empty()
+                && theme::pill_button(ui, &palette, "Save attachments…", true).clicked()
+            {
+                app.actions.push(Action::SaveAttachmentsAs {
+                    files: files.clone(),
+                });
+            }
             if theme::pill_button(ui, &palette, "Forward…", true).clicked() {
                 app.actions.push(Action::ShowDialog(Dialog::Forward {
                     chat: chat.to_owned(),
@@ -5048,16 +5056,77 @@ fn selection_bar(app: &mut App, ui: &mut egui::Ui, chat: &str, selected: &[Strin
     });
 }
 
+/// Returns local files belonging to the selected messages, including every
+/// downloaded image in an interactive card or carousel.
+fn selected_attachment_files(app: &App, chat: &str, selected: &[String]) -> Vec<(PathBuf, String)> {
+    app.conversations
+        .get(chat)
+        .into_iter()
+        .flat_map(|conversation| conversation.messages.iter())
+        .filter(|message| selected.iter().any(|id| id == &message.id))
+        .flat_map(|message| attachment_files(&message.content))
+        .collect()
+}
+
+fn attachment_files(content: &Content) -> Vec<(PathBuf, String)> {
+    let mut files = Vec::new();
+    match content {
+        Content::Image { media, .. }
+        | Content::Video { media, .. }
+        | Content::Audio { media, .. }
+        | Content::Sticker { media, .. } => push_attachment_file(&mut files, media, None),
+        Content::Document {
+            media, file_name, ..
+        } => push_attachment_file(&mut files, media, Some(file_name)),
+        Content::Interactive {
+            card: Some(card), ..
+        } => attachment_card_files(card, &mut files),
+        _ => {}
+    }
+    files
+}
+
+fn attachment_card_files(card: &crate::model::InteractiveCard, files: &mut Vec<(PathBuf, String)>) {
+    if let Some(media) = &card.image {
+        push_attachment_file(files, media, None);
+    }
+    for child in &card.carousel {
+        attachment_card_files(child, files);
+    }
+}
+
+fn push_attachment_file(
+    files: &mut Vec<(PathBuf, String)>,
+    media: &Media,
+    suggested_name: Option<&str>,
+) {
+    let Some(path) = media.path.as_ref() else {
+        return;
+    };
+    files.push((
+        path.clone(),
+        suggested_name
+            .filter(|name| !name.trim().is_empty())
+            .map_or_else(
+                || attachment_name_from_path(path),
+                |name| name.replace(['/', '\\'], "_"),
+            ),
+    ));
+}
+
+fn attachment_name_from_path(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "attachment".to_owned())
+}
+
 /// The file name to suggest when saving an attachment: the sender's name for
 /// documents, the cached file's name otherwise. Path separators are dropped so
 /// a crafted name cannot point the dialog somewhere else.
 fn attachment_name(content: &Content, path: &Path) -> String {
     let name = match content {
         Content::Document { file_name, .. } if !file_name.trim().is_empty() => file_name.clone(),
-        _ => path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "attachment".to_owned()),
+        _ => attachment_name_from_path(path),
     };
     name.replace(['/', '\\'], "_")
 }
@@ -5089,6 +5158,50 @@ fn chat_of(chat: &ChatId) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attachment_files_include_main_and_carousel_media() {
+        let mut main = media(None, None);
+        main.path = Some(PathBuf::from("/cache/photo.jpg"));
+        let mut card_image = media(None, None);
+        card_image.path = Some(PathBuf::from("/cache/card.png"));
+        let mut carousel_image = media(None, None);
+        carousel_image.path = Some(PathBuf::from("/cache/second.webp"));
+        let content = Content::Interactive {
+            text: String::new(),
+            card: Some(Box::new(crate::model::InteractiveCard {
+                body: String::new(),
+                buttons: Vec::new(),
+                image: Some(card_image),
+                needs_phone: false,
+                carousel: vec![crate::model::InteractiveCard {
+                    image: Some(carousel_image),
+                    ..Default::default()
+                }],
+                thumbnail: None,
+            })),
+        };
+
+        let mut content_with_main = Content::Image {
+            caption: None,
+            media: main,
+        };
+        assert_eq!(
+            attachment_files(&content_with_main),
+            vec![(PathBuf::from("/cache/photo.jpg"), "photo.jpg".to_owned(),)]
+        );
+        content_with_main = content;
+        assert_eq!(
+            attachment_files(&content_with_main),
+            vec![
+                (PathBuf::from("/cache/card.png"), "card.png".to_owned()),
+                (
+                    PathBuf::from("/cache/second.webp"),
+                    "second.webp".to_owned()
+                ),
+            ]
+        );
+    }
 
     #[test]
     fn saved_attachments_suggest_a_plain_file_name() {

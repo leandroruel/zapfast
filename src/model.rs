@@ -852,6 +852,10 @@ pub enum Action {
         path: PathBuf,
         name: String,
     },
+    /// Saves all downloaded attachments in the current message selection.
+    SaveAttachmentsAs {
+        files: Vec<(PathBuf, String)>,
+    },
     OpenUrl(String),
     CopyText(String),
     /// Closes the toast at this index. Only errors wait to be dismissed.

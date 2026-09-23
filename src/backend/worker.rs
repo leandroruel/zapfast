@@ -3655,6 +3655,41 @@ impl Worker {
                     waker.wake();
                 });
             }
+            Command::SaveAttachments { files } => {
+                let events = self.events.clone();
+                let waker = self.waker.clone();
+                tokio::task::spawn_blocking(move || {
+                    let Some(directory) = rfd::FileDialog::new()
+                        .set_title("Choose a folder for attachments")
+                        .pick_folder()
+                    else {
+                        return;
+                    };
+                    let total = files.len();
+                    let mut reserved = HashSet::new();
+                    let mut saved = 0;
+                    for (source, name) in files {
+                        if !source.is_file() {
+                            continue;
+                        }
+                        let target = next_attachment_path(&directory, &name, &mut reserved);
+                        if std::fs::copy(&source, target).is_ok() {
+                            saved += 1;
+                        }
+                    }
+                    let event = if saved == total {
+                        Event::Info(format!("Saved {saved} attachments"))
+                    } else if saved > 0 {
+                        Event::Error(format!(
+                            "Saved {saved} of {total} attachments; some files were unavailable"
+                        ))
+                    } else {
+                        Event::Error("Could not save any of the selected attachments".to_owned())
+                    };
+                    let _ = events.send(event);
+                    waker.wake();
+                });
+            }
             Command::PickStickerArchive => {
                 let commands = self.commands.clone();
                 let packs = self.packs_dir();
@@ -5585,6 +5620,47 @@ impl Worker {
     }
 }
 
+/// Makes a selected attachment name safe to use as one directory entry.
+fn safe_attachment_name(name: &str) -> String {
+    let name = Path::new(name)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+        .replace(['/', '\\'], "_");
+    if name.trim().is_empty() {
+        "attachment".to_owned()
+    } else {
+        name
+    }
+}
+
+/// Picks a non-overwriting destination for a copied attachment.
+fn next_attachment_path(directory: &Path, name: &str, reserved: &mut HashSet<PathBuf>) -> PathBuf {
+    let name = safe_attachment_name(name);
+    let path = directory.join(&name);
+    if !path.exists() && reserved.insert(path.clone()) {
+        return path;
+    }
+    let path = Path::new(&name);
+    let stem = path.file_stem().map_or("attachment", |stem| {
+        stem.to_str()
+            .filter(|stem| !stem.is_empty())
+            .unwrap_or("attachment")
+    });
+    let extension = path.extension().and_then(|extension| extension.to_str());
+    for number in 2.. {
+        let candidate_name = match extension {
+            Some(extension) => format!("{stem} ({number}).{extension}"),
+            None => format!("{stem} ({number})"),
+        };
+        let candidate = directory.join(candidate_name);
+        if !candidate.exists() && reserved.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+    unreachable!("attachment name suffix exhausted")
+}
+
 // --- free helpers ----------------------------------------------------------
 
 fn outgoing_forward(original: &wa::Message, expiration: Option<u32>) -> (wa::Message, Option<u32>) {
@@ -7143,6 +7219,24 @@ mod tests {
             "gz"
         );
         assert_eq!(extension_for("image/jpeg", Some("no-extension")), "jpg");
+    }
+
+    #[test]
+    fn batch_attachment_names_are_safe_and_do_not_overwrite_each_other() {
+        let directory = Path::new("/zapfast-test-directory-that-does-not-exist");
+        let mut reserved = HashSet::new();
+        assert_eq!(
+            next_attachment_path(directory, "../photo.jpg", &mut reserved),
+            directory.join("photo.jpg")
+        );
+        assert_eq!(
+            next_attachment_path(directory, "photo.jpg", &mut reserved),
+            directory.join("photo (2).jpg")
+        );
+        assert_eq!(
+            next_attachment_path(directory, "photo.jpg", &mut reserved),
+            directory.join("photo (3).jpg")
+        );
     }
 
     #[test]
